@@ -217,45 +217,78 @@ wundy:
         _ = _run_model(yaml_text)
 
 
-@pytest.mark.xfail(reason="Uniform distributed load not yet implemented", strict=False)
 def test_first_2():
     """
-    Placeholder: prescribe a uniform distributed load q over the domain and
-    verify the assembled global force vector matches the expected contributions
-    of linear 1D shape functions (each element of unit length with q=1
-    contributes [0.5, 0.5] to its end nodes).
+    Uniform 1D chain with distributed load:
+      - Nodes at x = 0..4 (unit spacing), E=10, A=1
+      - Node 1 fixed
+      - Uniform distributed load q = 10 (force/length) on all elements
 
-    Once implemented, the expected global F for 4 unit-length elements is:
-      [0.5, 1.0, 1.0, 1.0, 0.5]
+    Expected:
+      - Consistent global load vector: [5, 10, 10, 10, 5]
+      - Displacements (analytic and FE agree): [0, 3.5, 6.0, 7.5, 8.0]
+      - Global K identical to test_first_1 (tridiagonal form)
     """
     yaml_text = """\
 wundy:
   nodes: [[1, 0], [2, 1], [3, 2], [4, 3], [5, 4]]
   elements: [[1, 1, 2], [2, 2, 3], [3, 3, 4], [4, 4, 5]]
+
   boundary conditions:
   - name: fix-nodes
     dof: x
     nodes: [1]
+    type: dirichlet
+    value: 0.0
+
   distributed loads:
   - name: dload-1
-    elements: all
-    value: 1.0   # units: force/length
+    elements: [1, 2, 3, 4]   # <- list them explicitly
+    type: BX                  # <- required by schema
+    direction: [1]            # <- required by schema (1D)
+    value: 10.0               # force/length
+
   materials:
   - type: elastic
     name: mat-1
     parameters:
       E: 10.0
       nu: 0.3
+    density: 1.0              # <- make it positive to satisfy schema
+
   element blocks:
   - material: mat-1
     name: block-1
-    elements: all
+    elements: [1, 2, 3, 4]    # avoid bare "all" unless you resolve it
     element:
       type: t1d1
       properties:
         area: 1
 """
     soln = _run_model(yaml_text)
+
+    dofs = np.asarray(soln["dofs"], dtype=float)
+    K = np.asarray(soln["stiff"], dtype=float)
     F = np.asarray(soln["force"], dtype=float)
-    expected = np.array([0.5, 1.0, 1.0, 1.0, 0.5], dtype=float)
-    np.testing.assert_allclose(F, expected, atol=1e-12)
+
+    # Expected consistent nodal forces for q=10 over 4 unit elements:
+    np.testing.assert_allclose(F, [5.0, 10.0, 10.0, 10.0, 5.0], atol=1e-12)
+
+    # Same K pattern as test_first_1
+    np.testing.assert_allclose(
+        K,
+        [
+            [10, -10,   0,   0,   0],
+            [-10, 20, -10,   0,   0],
+            [  0, -10,  20, -10,  0],
+            [  0,   0, -10,  20, -10],
+            [  0,   0,   0, -10, 10],
+        ],
+        atol=1e-12,
+        rtol=0,
+    )
+
+    # Expected displacements for fixed x=0 end and no end point load:
+    # u(x) = -x^2/2 + 4x  => [0, 3.5, 6.0, 7.5, 8.0] at x=0..4
+    np.testing.assert_allclose(dofs, [0.0, 3.5, 6.0, 7.5, 8.0], atol=1e-10)
+
