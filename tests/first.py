@@ -33,6 +33,8 @@ import pytest
 
 import wundy
 import wundy.first
+from wundy.schemas import DIRICHLET, NEUMANN
+import wundy.elematl
 
 
 def _run_model(yaml_text: str):
@@ -323,8 +325,8 @@ def test_element_gauss_matches_analytical_linear_bar_with_diagnostics():
     f_expected = q0 * L * np.array([0.5, 0.5], dtype=float)
 
     # --- Compute Gauss-based results ---
-    Ke_fwd = elematl.element_stiffness_bar1d(xe_fwd, A, mat, n_gauss=2)
-    Ke_rev = elematl.element_stiffness_bar1d(xe_rev, A, mat, n_gauss=2)
+    Ke_fwd = elematl.element_stiffness_bar1d(xe_fwd, A, mat, ue=None, n_gauss=2)
+    Ke_rev = elematl.element_stiffness_bar1d(xe_rev, A, mat, ue=None, n_gauss=2)
     f_fwd = elematl.element_external_body_bar1d(xe_fwd, q0, n_gauss=2)
     f_rev = elematl.element_external_body_bar1d(xe_rev, q0, n_gauss=2)
 
@@ -394,3 +396,88 @@ def test_element_gauss_matches_analytical_linear_bar_with_diagnostics():
         f"f_rev: {f_rev}\n"
         f"Abs diff: {np.abs(f_fwd - f_rev)}"
     )
+def test_newton_linear_converges_in_one_step():
+    """
+    For a purely linear bar (linear elastic material, constant area, small strain),
+    Newton–Raphson should converge in a single iteration starting from u = 0.
+
+    This is enforced by running the Newton solver with max_iter=1 and checking
+    that:
+      1) it does not raise (i.e. it converged within that single step), and
+      2) the solution matches the standard linear solve from first_fe_code.
+    """
+
+    # Simple 2-element bar on [0, 2]
+    # nodes: 0 -- 1 -- 2
+    coords = np.array([[0.0], [1.0], [2.0]], dtype=float)
+
+    blocks = [
+        {
+            "id": 1,
+            "material": "mat_lin",
+            "element": {
+                "type": "bar2",
+                "properties": {"area": 1.0},
+            },
+            # connectivity is 0-based because first_fe_code indexes coords directly
+            "connect": np.array([[0, 1], [1, 2]], dtype=int),
+        }
+    ]
+
+    materials = {
+        "mat_lin": {
+            "type": "linear_elastic",
+            "parameters": {"E": 10.0},  # any positive E
+            "density": 0.0,
+        }
+    }
+
+    # Boundary conditions:
+    #   u(0) = 0  (fixed left end)
+    #   F(2) = 10 (point load at right end)
+    bcs = [
+        {
+            "type": DIRICHLET,
+            "nodes": [0],
+            "local_dof": 0,
+            "value": 0.0,
+        },
+        {
+            "type": NEUMANN,
+            "nodes": [2],
+            "local_dof": 0,
+            "value": 10.0,
+        },
+    ]
+
+    # No distributed loads in this test
+    dload = None
+    block_elem_map: dict[int, tuple[int, int]] = {}
+
+    # Reference linear solution
+    lin_sol = wundy.first.first_fe_code(
+        coords=coords,
+        blocks=blocks,
+        bcs=bcs,
+        dload=dload,
+        materials=materials,
+        block_elem_map=block_elem_map,
+    )
+    u_lin = lin_sol["dofs"]
+
+    # Newton solve with max_iter=1 must converge and reproduce the linear solution
+    newton_sol = wundy.first.newton_solve_bar1d(
+        coords=coords,
+        blocks=blocks,
+        bcs=bcs,
+        dload=dload,
+        materials=materials,
+        block_elem_map=block_elem_map,
+        tol=1e-12,
+        max_iter=1,
+    )
+    u_newton = newton_sol["dofs"]
+
+    # If the method needed more than one iteration it should have raised,
+    # so reaching this assert already implies "single step". Now check equality.
+    assert np.allclose(u_newton, u_lin, rtol=1e-12, atol=1e-12)

@@ -28,12 +28,54 @@ class LinearElastic1D:
     def tangent(self, strain: float) -> float:
         return self.E
 
+class NeoHookean1D:
+    """
+    1D Neo-Hookean material.
+
+    For pure 1D bars, volumetric stiffness K does not appear.
+    We therefore default K = 0 unless explicitly provided.
+
+        W(λ) = 0.5 μ (λ^2 - 1 - 2 ln λ)      [K=0 for 1D]
+
+        σ(ε) = μ (λ - 1/λ)
+        C_tan(ε) = μ (1 + 1/λ²)
+
+    where λ = 1 + ε > 0.
+    """
+
+    def __init__(self, mu: float, K: float = 0.0, rho: float | None = None):
+        self.mu = float(mu)
+        self.K = float(K)  # usually 0 for 1D
+        self.rho = None if rho is None else float(rho)
+
+    def _stretch(self, strain: float) -> float:
+        lam = 1.0 + float(strain)
+        if lam <= 0.0:
+            raise ValueError(
+                f"NeoHookean1D: invalid stretch λ={lam:.6g} from strain {strain:.6g}; "
+                "λ must be > 0."
+            )
+        return lam
+
+    def stress(self, strain: float) -> float:
+        lam = self._stretch(strain)
+        mu = self.mu
+        K = self.K
+        return mu * (lam - 1.0 / lam) + K * (np.log(lam) / lam)
+
+    def tangent(self, strain: float) -> float:
+        lam = self._stretch(strain)
+        mu = self.mu
+        K = self.K
+        lam2 = lam * lam
+        return mu * (1.0 + 1.0 / lam2) + K * (1.0 - np.log(lam)) / lam2
+
 def make_material(material_spec: dict[str, Any]) -> Material1D:
     """
     Adapter: your input 'materials' dict -> a material object with stress()/tangent().
     Expected schema (current code already uses this layout):
         {
-          "type": "linear_elastic",
+          "type": "linear_elastic" | "neohookean" | ...,
           "parameters": {"E": ..., "alpha": 0.0, "dT": 0.0},
           "density": ... (optional)
         }
@@ -49,6 +91,24 @@ def make_material(material_spec: dict[str, Any]) -> Material1D:
             dT=params.get("dT", 0.0),
             rho=rho,
         )
+    
+    elif mtype in {"neohookean", "neo-hookean", "nh"}:
+    # User can supply mu,K or E,nu. But for 1D: K defaults to 0.
+        if "mu" in params:
+            mu = float(params["mu"])
+            K = float(params.get("K", 0.0))   # default K=0 in 1D
+        elif "E" in params and "nu" in params:
+            E = float(params["E"])
+            nu = float(params["nu"])
+            mu = E / (2.0 * (1.0 + nu))
+            # DO NOT compute K from E,nu unless user explicitly provides it.
+            K = float(params.get("K", 0.0))   # remains zero for 1D use
+        else:
+            raise ValueError(
+                "NeoHookean1D requires either ('mu', ['K']) or ('E','nu', ['K'])."
+            )
+        return NeoHookean1D(mu=mu, K=K, rho=rho)
+    
     raise NotImplementedError(f"Material type {mtype!r} not supported.")
 
 
@@ -94,6 +154,7 @@ def element_stiffness_bar1d(
     xe: NDArray[float],                      # shape (2,)
     A: float | Callable[[float], float],     # constant or A(x)
     material: Material1D,
+    ue: Optional[NDArray[float]] = None,
     n_gauss: int = 2,
 ) -> NDArray[float]:
     """Ke = ∑ B^T C B A(x) J w"""
@@ -101,6 +162,11 @@ def element_stiffness_bar1d(
         raise NotImplementedError("Only 2-pt Gauss implemented for now.")
     Ke = np.zeros((2, 2), dtype=float)
     A_of_x = _as_area_func(A)
+
+    #if ue is None (e.g. linerar assembly), use zero strain
+    if ue is None:
+        ue = np.zeros(2, dtype=float)
+        
     for xi, w in zip(_GAUSS_XI_2, _GAUSS_W_2):
         x, J, B, _ = _kinematics_1d(xe, ue=None, xi=xi)
         C = material.tangent(0.0)  # linear elastic -> constant
@@ -143,7 +209,7 @@ def element_external_body_bar1d(
     for xi, w in zip(_GAUSS_XI_2, _GAUSS_W_2):
         N, dN_dxi = _shape_lin(xi)
         h = float(xe[1] - xe[0])
-        J = h / 2.0
+        J = abs(h) / 2.0
         x = float(N @ xe)
         fext += N * qx(x) * J * w
     return fext
