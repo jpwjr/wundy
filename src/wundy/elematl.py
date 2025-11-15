@@ -75,7 +75,7 @@ def _kinematics_1d(xe: NDArray[float], ue: Optional[NDArray[float]], xi: float
     h = float(xe[1] - xe[0])
     if np.isclose(h, 0.0):
         raise ValueError("Zero-length element.")
-    J = h / 2.0
+    J = abs(h) / 2.0
     dN_dx = dN_dxi / J
     B = dN_dx  # for 1D bar, B = [dN1/dx, dN2/dx]
     x = float(N @ xe)

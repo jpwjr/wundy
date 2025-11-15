@@ -292,3 +292,105 @@ wundy:
     # u(x) = -x^2/2 + 4x  => [0, 3.5, 6.0, 7.5, 8.0] at x=0..4
     np.testing.assert_allclose(dofs, [0.0, 3.5, 6.0, 7.5, 8.0], atol=1e-10)
 
+#Test to ensure Gauss quadrature matches analytical integration for 1D linear bar
+def test_element_gauss_matches_analytical_linear_bar_with_diagnostics():
+    """
+    Analytical integration vs. Gauss (2-point) for a 2-node linear 1D bar.
+
+    Checks (with detailed assertions):
+      1) Ke (Gauss) == (E*A/L) [[1, -1], [-1, 1]] (analytical)
+      2) Ke is symmetric and finite
+      3) f_ext (Gauss, constant q, forward order) == q*L [1/2, 1/2] (analytical)
+      4) Ke is invariant to node order; f_ext uses signed Jacobian
+    """
+    import numpy as np
+    import wundy.elematl as elematl
+
+    # Parameters
+    E = 10.0
+    A = 2.0
+    L = 3.0
+    q0 = 4.0
+    TOL = 1e-12
+
+    # Material and element coordinates (forward and reversed)
+    mat = elematl.LinearElastic1D(E=E)
+    xe_fwd = np.array([0.0, L], dtype=float)
+    xe_rev = np.array([L, 0.0], dtype=float)
+
+    # --- Expected analytical results (forward orientation) ---
+    Ke_expected = (E * A / L) * np.array([[1.0, -1.0], [-1.0, 1.0]], dtype=float)
+    f_expected = q0 * L * np.array([0.5, 0.5], dtype=float)
+
+    # --- Compute Gauss-based results ---
+    Ke_fwd = elematl.element_stiffness_bar1d(xe_fwd, A, mat, n_gauss=2)
+    Ke_rev = elematl.element_stiffness_bar1d(xe_rev, A, mat, n_gauss=2)
+    f_fwd = elematl.element_external_body_bar1d(xe_fwd, q0, n_gauss=2)
+    f_rev = elematl.element_external_body_bar1d(xe_rev, q0, n_gauss=2)
+
+    # --- Shape and finiteness checks (stiffness) ---
+    assert Ke_fwd.shape == (2, 2), (
+        f"Ke_fwd shape incorrect; expected (2,2), got {Ke_fwd.shape}"
+    )
+    assert Ke_rev.shape == (2, 2), (
+        f"Ke_rev shape incorrect; expected (2,2), got {Ke_rev.shape}"
+    )
+    assert np.isfinite(Ke_fwd).all(), f"Ke_fwd contains non-finite values:\n{Ke_fwd}"
+    assert np.isfinite(Ke_rev).all(), f"Ke_rev contains non-finite values:\n{Ke_rev}"
+
+    # --- Symmetry checks (stiffness) ---
+    assert np.allclose(Ke_fwd, Ke_fwd.T, atol=TOL), (
+        f"Ke_fwd is not symmetric within atol={TOL}:\nKe_fwd=\n{Ke_fwd}\nKe_fwd.T=\n{Ke_fwd.T}"
+    )
+    assert np.allclose(Ke_rev, Ke_rev.T, atol=TOL), (
+        f"Ke_rev is not symmetric within atol={TOL}:\nKe_rev=\n{Ke_rev}\nKe_rev.T=\n{Ke_rev.T}"
+    )
+
+    # --- Analytical vs. Gauss (stiffness) ---
+    assert np.allclose(Ke_fwd, Ke_expected, atol=TOL, rtol=0), (
+        "Gauss stiffness (forward order) does not match analytical result.\n"
+        f"Params: E={E}, A={A}, L={L}\n"
+        f"Expected:\n{Ke_expected}\nGot:\n{Ke_fwd}\n"
+        f"Abs diff:\n{np.abs(Ke_fwd - Ke_expected)}"
+    )
+    assert np.allclose(Ke_rev, Ke_expected, atol=TOL, rtol=0), (
+        "Gauss stiffness (reversed order) does not match analytical result.\n"
+        f"Params: E={E}, A={A}, L={L}\n"
+        f"Expected:\n{Ke_expected}\nGot:\n{Ke_rev}\n"
+        f"Abs diff:\n{np.abs(Ke_rev - Ke_expected)}"
+    )
+
+    # --- Consistent body load: forward orientation only ---
+    assert f_fwd.shape == (2,), f"f_fwd shape incorrect; expected (2,), got {f_fwd.shape}"
+    assert np.isfinite(f_fwd).all(), f"f_fwd contains non-finite values: {f_fwd}"
+    assert np.allclose(f_fwd, f_expected, atol=TOL, rtol=0), (
+        "Gauss consistent nodal load (forward order) does not match analytical result.\n"
+        f"Params: q0={q0}, L={L}\n"
+        f"Expected: {f_expected}\nGot: {f_fwd}\n"
+        f"Abs diff: {np.abs(f_fwd - f_expected)}"
+    )
+
+    # --- Document current behavior for reversed order (signed J) ---
+    # With xe_rev (nodes reversed), your implementation uses J = (x2-x1)/2 < 0,
+    # so the Gauss-integrated body load flips sign. Keep this explicit so a future
+    # change to |J| will cause a helpful failure message here.
+    assert np.allclose(f_rev, -f_expected, atol=TOL, rtol=0), (
+        "For reversed node order, element_external_body_bar1d currently integrates "
+        "with a signed Jacobian (J<0), so the body-load vector flips sign.\n"
+        "This assertion documents that behavior. If you intentionally switch to "
+        "using |J| for body loads, update this assertion to expect +f_expected.\n"
+        f"Expected (with signed J): {-f_expected}\nGot: {f_rev}"
+    )
+
+    # --- Invariance of Ke to node order (explicit) ---
+    assert np.allclose(Ke_fwd, Ke_rev, atol=TOL, rtol=0), (
+        "Ke changes when node order is reversed; Jacobian/kinematics may be wrong.\n"
+        f"Ke_fwd:\n{Ke_fwd}\nKe_rev:\n{Ke_rev}\n"
+        f"Abs diff:\n{np.abs(Ke_fwd - Ke_rev)}"
+    )
+    assert np.allclose(f_fwd, f_rev, atol=TOL, rtol=0), (
+        "Consistent nodal loads change when node order is reversed; shape/Jacobian may be wrong.\n"
+        f"f_fwd: {f_fwd}\n"
+        f"f_rev: {f_rev}\n"
+        f"Abs diff: {np.abs(f_fwd - f_rev)}"
+    )
