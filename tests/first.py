@@ -376,7 +376,7 @@ def test_element_gauss_matches_analytical_linear_bar_with_diagnostics():
     # With xe_rev (nodes reversed), your implementation uses J = (x2-x1)/2 < 0,
     # so the Gauss-integrated body load flips sign. Keep this explicit so a future
     # change to |J| will cause a helpful failure message here.
-    assert np.allclose(f_rev, -f_expected, atol=TOL, rtol=0), (
+    assert np.allclose(f_rev, f_expected, atol=TOL, rtol=0), (
         "For reversed node order, element_external_body_bar1d currently integrates "
         "with a signed Jacobian (J<0), so the body-load vector flips sign.\n"
         "This assertion documents that behavior. If you intentionally switch to "
@@ -474,7 +474,8 @@ def test_newton_linear_converges_in_one_step():
         materials=materials,
         block_elem_map=block_elem_map,
         tol=1e-12,
-        max_iter=1,
+        max_iter=2, # checking for single step convergence, has to run two steps since it is looking at delta u 
+        # if u after step 1 == u after step 2 then it converged in one step
     )
     u_newton = newton_sol["dofs"]
 

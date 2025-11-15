@@ -166,7 +166,7 @@ def element_stiffness_bar1d(
     #if ue is None (e.g. linerar assembly), use zero strain
     if ue is None:
         ue = np.zeros(2, dtype=float)
-        
+
     for xi, w in zip(_GAUSS_XI_2, _GAUSS_W_2):
         x, J, B, _ = _kinematics_1d(xe, ue=None, xi=xi)
         C = material.tangent(0.0)  # linear elastic -> constant
