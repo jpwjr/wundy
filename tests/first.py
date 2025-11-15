@@ -20,7 +20,7 @@ Goals covered by these tests:
 Assumptions:
 - `wundy.ui.load` accepts a file-like stream with YAML content.
 - `wundy.ui.preprocess` returns a dict with keys:
-  "coords", "blocks", "bcs", "dload", "materials", "block_elem_map".
+  "coords", "blocks", "bcs", "dloads", "materials", "block_elem_map".
 - `wundy.first.first_fe_code` returns a dict with keys:
   "dofs", "stiff", "force".
 
@@ -44,7 +44,7 @@ def _run_model(yaml_text: str):
         inp["coords"],
         inp["blocks"],
         inp["bcs"],
-        inp["dload"],
+        inp["dloads"],
         inp["materials"],
         inp["block_elem_map"],
     )
@@ -242,7 +242,7 @@ wundy:
     value: 0.0
 
   distributed loads:
-  - name: dload-1
+  - name: dloads-1
     elements: [1, 2, 3, 4]   # <- list them explicitly
     type: BX                  # <- required by schema
     direction: [1]            # <- required by schema (1D)

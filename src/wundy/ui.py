@@ -244,7 +244,7 @@ def preprocess(data: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
         )
 
     # Process distributed load
-    dload: list[Any] = preprocessed.setdefault("dload", [])
+    dloads: list[Any] = preprocessed.setdefault("dloads", [])
     for i, dl in enumerate(inp.get("distributed loads", [])):
         if "name" in dl:
             name = dl["name"]
@@ -270,7 +270,7 @@ def preprocess(data: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
                     )
                 else:
                     elems.append(elem_map[e])
-        dload.append(
+        dloads.append(
             {
                 "name": name,
                 "elements": elems,
