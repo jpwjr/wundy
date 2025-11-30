@@ -128,10 +128,7 @@ def _kinematics_1d(xe: NDArray[float], ue: Optional[NDArray[float]], xi: float
     return x, J, B, strain
 
 def _as_area_func(A: float | Callable[[float], float]) -> Callable[[float], float]:
-    if callable(A):
-        return A
-    a = float(A)
-    return lambda x: a
+    return A if callable(A) else (lambda x: float(A))
 
 def element_stiffness_bar1d(
     xe: NDArray[float],                  
