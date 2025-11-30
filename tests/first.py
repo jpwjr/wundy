@@ -30,6 +30,7 @@ If your local schema differs, adjust the YAML keys or expectations as needed.
 import io
 import numpy as np
 import pytest
+import numpy.testing as npt
 
 import wundy
 import wundy.first
