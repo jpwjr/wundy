@@ -43,10 +43,11 @@ class NeoHookean1D:
     where λ = 1 + ε > 0.
     """
 
-    def __init__(self, mu: float, K: float = 0.0, rho: float | None = None):
+    def __init__(self, mu: float, K: float = 0.0, rho: float | None = None, nu = None):
         self.mu = float(mu)
         self.K = float(K)  # usually 0 for 1D
         self.rho = None if rho is None else float(rho)
+        self.nu = nu
 
     def _stretch(self, strain: float) -> float:
         lam = 1.0 + float(strain)
@@ -71,20 +72,12 @@ class NeoHookean1D:
         return mu * (1.0 + 1.0 / lam2) + K * (1.0 - np.log(lam)) / lam2
 
 def make_material(material_spec: dict[str, Any]) -> Material1D:
-    """
-    Adapter: your input 'materials' dict -> a material object with stress()/tangent().
-    Expected schema (current code already uses this layout):
-        {
-          "type": "linear_elastic" | "neohookean" | ...,
-          "parameters": {"E": ..., "alpha": 0.0, "dT": 0.0},
-          "density": ... (optional)
-        }
-    """
+
     mtype = material_spec.get("type", "linear_elastic").lower()
     params = material_spec.get("parameters", {})
     rho = material_spec.get("density", None)
 
-    if mtype in {"linear", "elastic", "linear_elastic", "linear-elastic"}:
+    if mtype in {"linear", "ELASTIC", "elastic", "linear_elastic", "linear-elastic"}:
         return LinearElastic1D(
             E=params["E"],
             alpha=params.get("alpha", 0.0),
@@ -93,16 +86,15 @@ def make_material(material_spec: dict[str, Any]) -> Material1D:
         )
     
     elif mtype in {"neohookean", "neo-hookean", "nh"}:
-    # User can supply mu,K or E,nu. But for 1D: K defaults to 0.
+
         if "mu" in params:
             mu = float(params["mu"])
-            K = float(params.get("K", 0.0))   # default K=0 in 1D
+            K = float(params.get("K", 0.0)) 
         elif "E" in params and "nu" in params:
             E = float(params["E"])
             nu = float(params["nu"])
             mu = E / (2.0 * (1.0 + nu))
-            # DO NOT compute K from E,nu unless user explicitly provides it.
-            K = float(params.get("K", 0.0))   # remains zero for 1D use
+            K = float(params.get("K", 0.0))  
         else:
             raise ValueError(
                 "NeoHookean1D requires either ('mu', ['K']) or ('E','nu', ['K'])."
@@ -112,9 +104,6 @@ def make_material(material_spec: dict[str, Any]) -> Material1D:
     raise NotImplementedError(f"Material type {mtype!r} not supported.")
 
 
-# ---------- Quadrature utilities ----------
-
-# 2-point Gauss on [-1, 1]
 _GAUSS_XI_2 = np.array([-1.0 / np.sqrt(3.0), 1.0 / np.sqrt(3.0)])
 _GAUSS_W_2  = np.array([1.0, 1.0])
 
@@ -126,18 +115,14 @@ def _shape_lin(xi: float) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
 
 def _kinematics_1d(xe: NDArray[float], ue: Optional[NDArray[float]], xi: float
                    ) -> tuple[float, float, NDArray[float], float]:
-    """
-    Return (x, J, B, strain) at Gauss point xi for a 2-node linear bar element.
-    xe: shape (2,) physical coordinates
-    ue: shape (2,) nodal displacements (optional for stiffness)
-    """
+    
     N, dN_dxi = _shape_lin(xi)
     h = float(xe[1] - xe[0])
     if np.isclose(h, 0.0):
         raise ValueError("Zero-length element.")
     J = abs(h) / 2.0
     dN_dx = dN_dxi / J
-    B = dN_dx  # for 1D bar, B = [dN1/dx, dN2/dx]
+    B = dN_dx  
     x = float(N @ xe)
     strain = float(B @ ue) if ue is not None else 0.0
     return x, J, B, strain
@@ -148,11 +133,9 @@ def _as_area_func(A: float | Callable[[float], float]) -> Callable[[float], floa
     a = float(A)
     return lambda x: a
 
-# ---------- Element responses (Gauss-based) ----------
-
 def element_stiffness_bar1d(
-    xe: NDArray[float],                      # shape (2,)
-    A: float | Callable[[float], float],     # constant or A(x)
+    xe: NDArray[float],                  
+    A: float | Callable[[float], float],     
     material: Material1D,
     ue: Optional[NDArray[float]] = None,
     n_gauss: int = 2,
@@ -163,19 +146,18 @@ def element_stiffness_bar1d(
     Ke = np.zeros((2, 2), dtype=float)
     A_of_x = _as_area_func(A)
 
-    #if ue is None (e.g. linerar assembly), use zero strain
     if ue is None:
         ue = np.zeros(2, dtype=float)
 
     for xi, w in zip(_GAUSS_XI_2, _GAUSS_W_2):
-        x, J, B, _ = _kinematics_1d(xe, ue=None, xi=xi)
-        C = material.tangent(0.0)  # linear elastic -> constant
+        x, J, B, strain = _kinematics_1d(xe, ue, xi)
+        C = material.tangent(strain)
         Ke += np.outer(B, B) * C * A_of_x(x) * J * w
     return Ke
 
 def element_internal_force_bar1d(
-    xe: NDArray[float],                      # shape (2,)
-    ue: NDArray[float],                      # shape (2,)
+    xe: NDArray[float],                     
+    ue: NDArray[float],                
     A: float | Callable[[float], float],
     material: Material1D,
     n_gauss: int = 2,
@@ -192,8 +174,8 @@ def element_internal_force_bar1d(
     return fint
 
 def element_external_body_bar1d(
-    xe: NDArray[float],                          # shape (2,)
-    q_of_x: float | Callable[[float], float],    # force/length; constant or function of x
+    xe: NDArray[float],                       
+    q_of_x: float | Callable[[float], float],   
     n_gauss: int = 2,
 ) -> NDArray[float]:
     """Consistent nodal load: f_ext = ∑ N q(x) J w"""
@@ -213,3 +195,39 @@ def element_external_body_bar1d(
         x = float(N @ xe)
         fext += N * qx(x) * J * w
     return fext
+
+def make_q_constant(q: float | int) -> Callable[[float], float]:
+    """Return a spatially constant distributed load q(x) ≡ q."""
+    q_const = float(q)
+
+    def q_of_x(x: float) -> float:
+        return q_const
+
+    return q_of_x
+
+
+def make_q_from_table(xq_pairs: Any) -> Callable[[float], float]:
+
+    xq = np.asarray(xq_pairs, dtype=float)
+    if xq.ndim != 2 or xq.shape[1] != 2:
+        raise ValueError("xq_pairs must be an array-like of shape (n, 2)")
+
+    xs = xq[:, 0]
+    qs = xq[:, 1]
+
+    def q_of_x(x: float) -> float:
+        return float(np.interp(float(x), xs, qs))
+
+    return q_of_x
+
+
+def make_q_from_equation(expr: str, L: float) -> Callable[[float], float]:
+
+    L_float = float(L)
+    allowed_globals = {"np": np, "pi": float(np.pi), "L": L_float}
+
+    def q_of_x(x: float) -> float:
+        local_env = {"x": float(x)}
+        return float(eval(expr, {"__builtins__": {}}, {**allowed_globals, **local_env}))
+
+    return q_of_x

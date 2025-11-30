@@ -157,4 +157,4 @@ def test_preprocess_input():
 
     assert isinstance(d["materials"], dict)
     material = d["materials"]["MAT-1"]
-    assert material == {"type": "ELASTIC", "parameters": {"E": 10.0, "nu": 0.3}}
+    assert material == {"type": "ELASTIC", "parameters": {"E": 10.0, "nu": 0.3}, "density": 0.0}

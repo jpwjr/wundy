@@ -73,6 +73,12 @@ def valid_dload_type(arg: str):
     # extension to 2/3D: allow other DLOADs
     return normalize_case(arg) in {"BX", "GRAV"}
 
+input_types = {"SCALAR", "TABLE", "EQUATION"}
+
+
+def valid_dload_input_type(arg: str) -> bool:
+    return normalize_case(arg) in input_types
+
 
 def validate_element(elem: dict[str, Any]) -> bool:
     if normalize_case(elem["type"]) == "T1D1":
@@ -97,6 +103,66 @@ def validate_material_parameters(material: dict[str, dict[str, Any]]) -> bool:
         raise ValueError(f"Unknown material {material['type']!r}")
     return True
 
+def validate_dload(dl: dict[str, Any]) -> bool:
+    """
+    Post-process and validate a distributed load entry based on input_type.
+
+    input_type:
+      - SCALAR   : value must be numeric -> float
+      - TABLE    : value must be [[x0, q0], [x1, q1], ...]
+      - EQUATION : value must be a string (e.g., "sin(pi*x/L)")
+    """
+    itype = normalize_case(dl.get("input_type", "SCALAR"))
+    val = dl["value"]
+
+    if itype == "SCALAR":
+        # Backward-compatible: old inputs that had just a number
+        if not isnumeric(val):
+            raise ValueError(
+                f"dload {dl.get('name', '')!r}: for input_type='SCALAR', "
+                f"value must be numeric, got {type(val).__name__}"
+            )
+        dl["value"] = float(val)
+
+    elif itype == "TABLE":
+        # Expect list of [x, q] pairs
+        if not isinstance(val, list):
+            raise ValueError(
+                f"dload {dl.get('name', '')!r}: for input_type='TABLE', "
+                f"value must be a list of [x, q] pairs"
+            )
+
+        table: list[list[float]] = []
+        for row in val:
+            if not (isinstance(row, (list, tuple)) and len(row) == 2):
+                raise ValueError(
+                    f"dload {dl.get('name', '')!r}: each table row must be [x, q], "
+                    f"got {row!r}"
+                )
+            x, q = row
+            if not isnumeric(x) or not isnumeric(q):
+                raise ValueError(
+                    f"dload {dl.get('name', '')!r}: table entries must be numeric, "
+                    f"got {row!r}"
+                )
+            table.append([float(x), float(q)])
+
+        dl["value"] = table
+
+    elif itype == "EQUATION":
+        # Expect a string expression, e.g. "sin(pi*x/L)"
+        if not isinstance(val, str):
+            raise ValueError(
+                f"dload {dl.get('name', '')!r}: for input_type='EQUATION', "
+                f"value must be a string expression, got {type(val).__name__}"
+            )
+        # Leave string as-is; later code (preprocessor / element force) will eval/parse it
+
+    else:
+        # This should not happen if the schema input_type validator is correct
+        raise ValueError(f"Unknown dload input_type {itype!r}")
+
+    return True
 
 nodes_schema = Schema(
     And(
@@ -167,10 +233,11 @@ dload_schema = Schema(
             "elements": Or(
                 And(str, Use(normalize_case)),  # element set name
                 And(int, Use(lambda e: [e])),  # single element
-                And(list, list_of_int),  # list of elements
+                And(list, list_of_int),        # list of elements
             ),
             "type": And(str, valid_dload_type, Use(normalize_case)),
-            "value": Use(float),
+            # Allow any type initially; validate_dload() will refine it
+            "value": object,
             "direction": And(
                 list,
                 list_of_numeric,
@@ -178,7 +245,13 @@ dload_schema = Schema(
                 Use(lambda sequence: [float(x) for x in sequence]),
             ),
             Optional("name"): And(str, Use(normalize_case)),
+            Optional("input_type", default="SCALAR"): And(
+                str,
+                valid_dload_input_type,
+                Use(normalize_case),
+            ),
         },
+        lambda d: validate_dload(d),  # enforce value shape based on input_type
     )
 )
 

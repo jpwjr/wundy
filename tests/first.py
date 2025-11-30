@@ -20,7 +20,7 @@ Goals covered by these tests:
 Assumptions:
 - `wundy.ui.load` accepts a file-like stream with YAML content.
 - `wundy.ui.preprocess` returns a dict with keys:
-  "coords", "blocks", "bcs", "dloads", "materials", "block_elem_map".
+  "coords", "blocks", "bcs", "dload", "materials", "block_elem_map".
 - `wundy.first.first_fe_code` returns a dict with keys:
   "dofs", "stiff", "force".
 
@@ -46,7 +46,7 @@ def _run_model(yaml_text: str):
         inp["coords"],
         inp["blocks"],
         inp["bcs"],
-        inp["dloads"],
+        inp["dload"],
         inp["materials"],
         inp["block_elem_map"],
     )
@@ -244,11 +244,11 @@ wundy:
     value: 0.0
 
   distributed loads:
-  - name: dloads-1
-    elements: [1, 2, 3, 4]   # <- list them explicitly
-    type: BX                  # <- required by schema
-    direction: [1]            # <- required by schema (1D)
-    value: 10.0               # force/length
+  - name: dload-1
+    elements: [1, 2, 3, 4]  
+    type: BX              
+    direction: [1]          
+    value: 10.0             
 
   materials:
   - type: elastic
@@ -256,12 +256,12 @@ wundy:
     parameters:
       E: 10.0
       nu: 0.3
-    density: 1.0              # <- make it positive to satisfy schema
+    density: 1.0             
 
   element blocks:
   - material: mat-1
     name: block-1
-    elements: [1, 2, 3, 4]    # avoid bare "all" unless you resolve it
+    elements: [1, 2, 3, 4]    
     element:
       type: t1d1
       properties:
@@ -296,15 +296,7 @@ wundy:
 
 #Test to ensure Gauss quadrature matches analytical integration for 1D linear bar
 def test_element_gauss_matches_analytical_linear_bar_with_diagnostics():
-    """
-    Analytical integration vs. Gauss (2-point) for a 2-node linear 1D bar.
 
-    Checks (with detailed assertions):
-      1) Ke (Gauss) == (E*A/L) [[1, -1], [-1, 1]] (analytical)
-      2) Ke is symmetric and finite
-      3) f_ext (Gauss, constant q, forward order) == q*L [1/2, 1/2] (analytical)
-      4) Ke is invariant to node order; f_ext uses signed Jacobian
-    """
     import numpy as np
     import wundy.elematl as elematl
 
@@ -397,18 +389,7 @@ def test_element_gauss_matches_analytical_linear_bar_with_diagnostics():
         f"Abs diff: {np.abs(f_fwd - f_rev)}"
     )
 def test_newton_linear_converges_in_one_step():
-    """
-    For a purely linear bar (linear elastic material, constant area, small strain),
-    Newton–Raphson should converge in a single iteration starting from u = 0.
 
-    This is enforced by running the Newton solver with max_iter=1 and checking
-    that:
-      1) it does not raise (i.e. it converged within that single step), and
-      2) the solution matches the standard linear solve from first_fe_code.
-    """
-
-    # Simple 2-element bar on [0, 2]
-    # nodes: 0 -- 1 -- 2
     coords = np.array([[0.0], [1.0], [2.0]], dtype=float)
 
     blocks = [
@@ -416,10 +397,10 @@ def test_newton_linear_converges_in_one_step():
             "id": 1,
             "material": "mat_lin",
             "element": {
-                "type": "bar2",
+                "type": "T1D1",
                 "properties": {"area": 1.0},
             },
-            # connectivity is 0-based because first_fe_code indexes coords directly
+          
             "connect": np.array([[0, 1], [1, 2]], dtype=int),
         }
     ]
@@ -427,14 +408,11 @@ def test_newton_linear_converges_in_one_step():
     materials = {
         "mat_lin": {
             "type": "linear_elastic",
-            "parameters": {"E": 10.0},  # any positive E
+            "parameters": {"E": 10.0},
             "density": 0.0,
         }
     }
 
-    # Boundary conditions:
-    #   u(0) = 0  (fixed left end)
-    #   F(2) = 10 (point load at right end)
     bcs = [
         {
             "type": DIRICHLET,
@@ -450,11 +428,9 @@ def test_newton_linear_converges_in_one_step():
         },
     ]
 
-    # No distributed loads in this test
     dload = None
     block_elem_map: dict[int, tuple[int, int]] = {}
 
-    # Reference linear solution
     lin_sol = wundy.first.first_fe_code(
         coords=coords,
         blocks=blocks,
@@ -465,7 +441,6 @@ def test_newton_linear_converges_in_one_step():
     )
     u_lin = lin_sol["dofs"]
 
-    # Newton solve with max_iter=1 must converge and reproduce the linear solution
     newton_sol = wundy.first.newton_solve_bar1d(
         coords=coords,
         blocks=blocks,
@@ -479,6 +454,331 @@ def test_newton_linear_converges_in_one_step():
     )
     u_newton = newton_sol["dofs"]
 
-    # If the method needed more than one iteration it should have raised,
-    # so reaching this assert already implies "single step". Now check equality.
     assert np.allclose(u_newton, u_lin, rtol=1e-12, atol=1e-12)
+
+def test_dload_constant_table_matches_scalar():
+
+  yaml_scalar = """\
+wundy:
+  nodes: [[1, 0], [2, 1], [3, 2], [4, 3], [5, 4]]
+  elements: [[1, 1, 2], [2, 2, 3], [3, 3, 4], [4, 4, 5]]
+  boundary conditions:
+  - name: fix-nodes
+    dof: x
+    nodes: [1]
+    type: dirichlet
+    value: 0.0
+
+  distributed loads:
+  - name: dload-const-scalar
+    elements: [1, 2, 3, 4]
+    type: BX
+    direction: [1]
+    value: 10.0
+
+  materials:
+  - type: elastic
+    name: mat-1
+    parameters:
+      E: 10.0
+      nu: 0.3
+    density: 1.0
+
+  element blocks:
+  - material: mat-1
+    name: block-1
+    elements: [1, 2, 3, 4]
+    element:
+      type: t1d1
+      properties:
+        area: 1
+"""
+  yaml_table = """\
+wundy:
+  nodes: [[1, 0], [2, 1], [3, 2], [4, 3], [5, 4]]
+  elements: [[1, 1, 2], [2, 2, 3], [3, 3, 4], [4, 4, 5]]
+
+  boundary conditions:
+  - name: fix-nodes
+    dof: x
+    nodes: [1]
+    type: dirichlet
+    value: 0.0
+
+  distributed loads:
+  - name: const-table
+    elements: [1, 2, 3, 4]
+    type: BX
+    direction: [1]
+    input_type: table
+    value: [[0.0, 10.0], [4.0, 10.0]]
+
+  materials:
+  - type: elastic
+    name: mat-1
+    parameters:
+      E: 10.0
+      nu: 0.3
+    density: 1.0
+
+  element blocks:
+  - material: mat-1
+    name: block-1
+    elements: [1, 2, 3, 4]
+    element:
+      type: t1d1
+      properties:
+        area: 1
+"""
+  soln_scalar = _run_model(yaml_scalar)
+  soln_table = _run_model(yaml_table)
+
+  F_scalar = np.asarray(soln_scalar["force"], dtype=float)
+  F_table = np.asarray(soln_table["force"], dtype=float)
+  u_scalar = np.asarray(soln_scalar["dofs"], dtype=float)
+  u_table = np.asarray(soln_table["dofs"], dtype=float)
+
+    # Identical global forces and displacements
+  np.testing.assert_allclose(F_table, F_scalar, rtol=0.0, atol=1e-12)
+  np.testing.assert_allclose(u_table, u_scalar, rtol=0.0, atol=1e-12)
+
+
+def test_arbitrary_dload_equation_qx_single_element():
+    """
+    Single 2-node bar on [0, 1], E=1, A=1, q(x) = x, both ends fixed.
+
+    Analytic consistent nodal loads for linear shape functions:
+      N1 = 1 - x, N2 = x, q(x) = x:
+
+      f1 = ∫_0^1 N1 * x dx = ∫_0^1 (x - x^2) dx = 1/6
+      f2 = ∫_0^1 N2 * x dx = ∫_0^1 x^2 dx       = 1/3
+    """
+    yaml_text = """\
+wundy:
+  nodes: [[1, 0.0], [2, 1.0]]
+  elements: [[1, 1, 2]]
+
+  boundary conditions:
+  - name: both-fixed
+    dof: x
+    nodes: [1, 2]
+    type: dirichlet
+    value: 0.0
+
+  distributed loads:
+  - name: qx-equation
+    elements: [1]
+    type: BX
+    direction: [1]
+    input_type: equation
+    value: "x"
+
+  materials:
+  - type: elastic
+    name: mat-1
+    parameters:
+      E: 1.0
+      nu: 0.3
+    density: 1.0
+
+  element blocks:
+  - material: mat-1
+    name: block-1
+    elements: [1]
+    element:
+      type: t1d1
+      properties:
+        area: 1.0
+"""
+    soln = _run_model(yaml_text)
+    F = np.asarray(soln["force"], dtype=float)
+
+    f_expected = np.array([1.0 / 6.0, 1.0 / 3.0], dtype=float)
+
+    np.testing.assert_allclose(F, f_expected, rtol=1e-12, atol=1e-12)
+
+
+def test_dload_table_vs_equation_sine_profile():
+    """
+    Non-uniform q(x) ≈ sin(pi*x/L) over 4 elements on [0, 4].
+
+    The same physical load is described in two ways:
+      - TABLE: dense [x, q(x)] sampling
+      - EQUATION: expr = "np.sin(pi*x/L)"
+
+    The assembled global forces should agree to within interpolation/quadrature
+    tolerance.
+    """
+    yaml_table = """\
+wundy:
+  nodes: [[1, 0.0], [2, 1.0], [3, 2.0], [4, 3.0], [5, 4.0]]
+  elements: [[1, 1, 2], [2, 2, 3], [3, 3, 4], [4, 4, 5]]
+
+  boundary conditions:
+  - name: fix-nodes
+    dof: x
+    nodes: [1]
+    type: dirichlet
+    value: 0.0
+
+  distributed loads:
+  - name: dload-sine-table
+    elements: [1, 2, 3, 4]
+    type: BX
+    direction: [1]
+    input_type: table
+    value: [
+      [0.0, 0.0],
+      [0.5, 0.3826834323650898],
+      [1.0, 0.7071067811865476],
+      [1.5, 0.9238795325112866],
+      [2.0, 1.0],
+      [2.5, 0.9238795325112867],
+      [3.0, 0.7071067811865477],
+      [3.5, 0.3826834323650899],
+      [4.0, 1.2246467991473532e-16]
+    ]
+
+  materials:
+  - type: elastic
+    name: mat-1
+    parameters:
+      E: 10.0
+      nu: 0.3
+    density: 1.0
+
+  element blocks:
+  - material: mat-1
+    name: block-1
+    elements: [1, 2, 3, 4]
+    element:
+      type: t1d1
+      properties:
+        area: 1.0
+"""
+    yaml_equation = """\
+wundy:
+  nodes: [[1, 0.0], [2, 1.0], [3, 2.0], [4, 3.0], [5, 4.0]]
+  elements: [[1, 1, 2], [2, 2, 3], [3, 3, 4], [4, 4, 5]]
+
+  boundary conditions:
+  - name: fix-nodes
+    dof: x
+    nodes: [1]
+    type: dirichlet
+    value: 0.0
+
+  distributed loads:
+  - name: dload-sine-equation
+    elements: [1, 2, 3, 4]
+    type: BX
+    direction: [1]
+    input_type: equation
+    value: "np.sin(pi*x/L)"
+
+  materials:
+  - type: elastic
+    name: mat-1
+    parameters:
+      E: 10.0
+      nu: 0.3
+    density: 1.0
+
+  element blocks:
+  - material: mat-1
+    name: block-1
+    elements: [1, 2, 3, 4]
+    element:
+      type: t1d1
+      properties:
+        area: 1.0
+"""
+    soln_table = _run_model(yaml_table)
+    soln_equation = _run_model(yaml_equation)
+
+    F_table = np.asarray(soln_table["force"], dtype=float)
+    F_equation = np.asarray(soln_equation["force"], dtype=float)
+
+    np.testing.assert_allclose(F_equation, F_table, rtol=2e-2, atol=1e-3)
+
+
+from wundy.beam import first_beam_code, assemble_beam_chain
+
+def test_beam_element_stiffness_and_shape():
+    """
+    Basic sanity: assembled K is square, symmetric, and matches 2 DOFs/node.
+    """
+    L = 1.0
+    E = 10.0
+    I = 2.0
+    q = 0.0
+
+    n_elem = 3
+    n_node = n_elem + 1
+
+    coords = np.zeros((n_node, 1), dtype=float)
+    coords[:, 0] = np.linspace(0.0, L, n_node)
+
+    connect = np.array([[i, i + 1] for i in range(n_elem)], dtype=int)
+
+
+    K, F = assemble_beam_chain(coords, connect, E, I, q)
+
+    n_dof = n_node * 2
+    assert K.shape == (n_dof, n_dof)
+    assert F.shape == (n_dof,)
+
+    npt.assert_allclose(K, K.T, atol=1e-12)
+
+
+def test_cantilever_beam_uniform_load_tip_deflection():
+    """
+    Euler–Bernoulli cantilever beam, length L, uniform load q:
+
+        w(L) = q L^4 / (8 E I)
+
+    Model: 4 Hermite beam elements, fixed at x=0 (w=0, θ=0), free at x=L.
+    """
+    L = 1.0
+    E = 10.0
+    I = 2.0
+    q = 1.0  
+
+    n_elem = 4
+    n_node = n_elem + 1
+
+    coords = np.zeros((n_node, 1), dtype=float)
+    coords[:, 0] = np.linspace(0.0, L, n_node)
+
+    connect = np.array([[i, i + 1] for i in range(n_elem)], dtype=int)
+
+    bcs = [
+        {"type": DIRICHLET, "node": 0, "local_dof": 0, "value": 0.0}, 
+        {"type": DIRICHLET, "node": 0, "local_dof": 1, "value": 0.0}, 
+    ]
+
+    sol = first_beam_code(
+        coords=coords,
+        connect=connect,
+        E=E,
+        I=I,
+        q=q,
+        bcs=bcs,
+    )
+
+    u = sol["dofs"]
+    K = sol["stiff"]
+    F = sol["force"]
+
+    dof_per_node = 2
+    tip_node = n_node - 1
+    tip_dof = tip_node * dof_per_node + 0
+    w_tip_FE = u[tip_dof]
+
+    w_tip_exact = q * L**4 / (8.0 * E * I)
+
+    npt.assert_allclose(w_tip_FE, w_tip_exact, rtol=5e-2, atol=1e-4)
+
+    npt.assert_allclose(K, K.T, atol=1e-12)
+
+    assert np.linalg.norm(F) > 0.0

@@ -7,6 +7,8 @@ import yaml
 
 from .schemas import NEUMANN
 from .schemas import input_schema
+from .elematl import make_q_constant, make_q_from_table, make_q_from_equation
+
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +108,7 @@ def preprocess(data: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
             errors += 1
             logger.error(f"Duplicate material {name!r}")
         else:
-            materials[name] = {"type": material["type"], "parameters": material["parameters"]}
+            materials[name] = {"type": material["type"], "parameters": material["parameters"], "density": material["density"],}
 
     # Put element blocks in dictionary for easier look up
     blocks: list[Any] = preprocessed.setdefault("blocks", [])
@@ -244,13 +246,27 @@ def preprocess(data: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
         )
 
     # Process distributed load
-    dloads: list[Any] = preprocessed.setdefault("dloads", [])
+    
+    # Model length for equation-type distributed loads (assume 1D in x)
+    if coords.shape[1] >= 1:
+        x_coords = coords[:, 0]
+        L = float(x_coords.max() - x_coords.min())
+    else:
+        L = 1.0
+
+    dload: list[Any] = preprocessed.setdefault("dload", [])
     for i, dl in enumerate(inp.get("distributed loads", [])):
         if "name" in dl:
             name = dl["name"]
         else:
             name = unique_name(inp["distributed loads"], "DLOAD")
             dl["name"] = name
+
+        # Normalize input_type; default to SCALAR for backward compatibility
+        input_type = dl.get("input_type", "SCALAR")
+        input_type_norm = str(input_type).upper()
+        value = dl["value"]
+
         elems: list[int] = []
         if isinstance(dl["elements"], str):
             # elements given as set name
@@ -260,7 +276,7 @@ def preprocess(data: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
                     f"Element set {dl['elements']!r}, required by distributed load {i + 1}, not defined"
                 )
             else:
-                elems.extend(elsets[eb["elements"]])
+                elems.extend(elsets[dl["elements"]])
         else:
             for e in dl["elements"]:
                 if e not in elem_map:
@@ -270,13 +286,25 @@ def preprocess(data: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
                     )
                 else:
                     elems.append(elem_map[e])
-        dloads.append(
+
+        # Build q(x) callable based on input_type
+        q_func = None
+        if input_type_norm == "SCALAR":
+            q_func = make_q_constant(value)
+        elif input_type_norm == "TABLE":
+            q_func = make_q_from_table(value)
+        elif input_type_norm == "EQUATION":
+            q_func = make_q_from_equation(value, L)
+
+        dload.append(
             {
                 "name": name,
                 "elements": elems,
                 "type": dl["type"],
-                "value": dl["value"],
                 "direction": dl["direction"],
+                "input_type": input_type_norm,
+                "value": value,       # keep original for backward compatibility
+                "q_func": q_func,     # normalized q(x) callable
             }
         )
 
@@ -286,7 +314,7 @@ def preprocess(data: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
         for global_elem_index, local_elem_index in block["elem_map"].items():
             if global_elem_index in block_elem_map:
                 errors += 1
-                logger.error(f"Duplicate element ID {e} found in multiple blocks")
+                logger.error(f"Duplicate element ID {global_elem_index} found in multiple blocks")
             block_elem_map[global_elem_index] = (ib, local_elem_index)
 
     # Check if all elements are assigned to an element block
