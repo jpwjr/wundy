@@ -17,12 +17,12 @@ def _build_mms_problem():
 
     def u_exact(x: float) -> float:
         xi = x / L
-        return U_tip * (3.0 * xi**2 - 2.0 * xi**3)
+        return U_tip*(3.0 * xi**2 - 2.0 * xi**3)
 
 
     def strain_exact(x: float) -> float:
         xi = x / L
-        du_dxi = U_tip * (6.0 * xi - 6.0 * xi**2)
+        du_dxi = U_tip*(6.0 * xi - 6.0 * xi**2)
         return du_dxi / L
 
 
