@@ -246,21 +246,6 @@ def newton_solve_bar1d(
     tol: float = 1e-10,
     max_iter: int = 25,
 ) -> dict[str, Any]:
-    """
-    Newton–Raphson solver for 1D bar, using internal-force formulation:
-
-        R_int(u) = F_ext
-        K_tan(u) = dR_int/du
-
-    Algorithm (matches your handwritten steps):
-
-      0) start with guess u_j (here u = 0)
-      1) compute k_ij(u), R_i(u), F_i
-      2) enforce boundary conditions (Dirichlet)
-      3) solve k_ij Δu_j = F_i - R_i
-      4) set u_j ← u_j + Δu_j
-      5) if ||Δu|| < tol, STOP; else go to 1
-    """
 
     dof_per_node = 1
     num_node = coords.shape[0]
@@ -287,8 +272,6 @@ def newton_solve_bar1d(
     if prescribed_dofs.size > 0:
         u[prescribed_dofs] = prescribed_vals
 
-   
-   
     F_ext = assemble_distributed_loads(
         coords=coords,
         blocks=blocks,

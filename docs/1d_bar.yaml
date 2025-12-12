@@ -1,0 +1,25 @@
+wundy:
+  nodes: [[1, 0], [2, 1], [3, 2], [4, 3], [5, 4]]
+  elements: [[1, 1, 2], [2, 2, 3], [3, 3, 4], [4, 4, 5]]
+  boundary conditions:
+  - name: fix-nodes
+    dof: x
+    nodes: [1]
+  concentrated loads:
+  - name: cload-1
+    nodes: [5]
+    value: 2.0
+  materials:
+  - type: elastic
+    name: mat-1
+    parameters:
+      E: 10.0
+      nu: 0.3
+  element blocks:
+  - material: mat-1
+    name: block-1
+    elements: all
+    element:
+      type: t1d1
+      properties:
+        area: 1
