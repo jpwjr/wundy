@@ -171,7 +171,7 @@ def first_fe_code(
     coords: NDArray[float],
     blocks: list[dict],
     bcs: list[dict],
-    dload: list[dict] | None,                # accept singular from preprocess
+    dload: list[dict] | None,              
     materials: dict[str, Any],
     block_elem_map: dict[int, tuple[int, int]],
 ) -> dict[str, Any]:

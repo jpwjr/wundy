@@ -12,13 +12,19 @@ def _build_mms_problem():
     A = 1.0
     mu = 10.0
     K = 0.0
+    U_tip = 1.0
     mat = NeoHookean1D(mu=mu, K=K)
 
     def u_exact(x: float) -> float:
-        return a * (x**2 - x**3 / L)
+        xi = x / L
+        return U_tip * (3.0 * xi**2 - 2.0 * xi**3)
+
 
     def strain_exact(x: float) -> float:
-        return a * (2.0 * x - 3.0 * x**2 / L)
+        xi = x / L
+        du_dxi = U_tip * (6.0 * xi - 6.0 * xi**2)
+        return du_dxi / L
+
 
     num_samples = 201
     x_grid = np.linspace(0.0, L, num_samples)
@@ -127,5 +133,5 @@ def test_mms_neohookean_bar_table_load():
 if __name__ == "__main__":
     from mms_bar import plot_mms_neohookean_bar
     plot_mms_neohookean_bar()
-    # python -m ms_bar
+    # python -m mms_bar
     # to print a nice plot of the results
