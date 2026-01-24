@@ -228,3 +228,15 @@ def make_q_from_equation(expr: str, L: float) -> Callable[[float], float]:
         return float(eval(expr, {"__builtins__": {}}, {**allowed_globals, **local_env}))
 
     return q_of_x
+
+def make_A_constant(A: float | int) -> Callable[[float], float]:
+    """Alias for area profiles: A(x) ≡ A."""
+    return make_q_constant(A)
+
+def make_A_from_table(xA_pairs: Any) -> Callable[[float], float]:
+    """Alias for area profiles: linear interpolation from table [[x, A], ...]."""
+    return make_q_from_table(xA_pairs)
+
+def make_A_from_equation(expr: str, L: float) -> Callable[[float], float]:
+    """Alias for area profiles: evaluate expression in x (and L, np, pi)."""
+    return make_q_from_equation(expr, L)

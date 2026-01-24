@@ -71,20 +71,80 @@ Except on gamma_u, gamma_uprime
 
 """
 
-from typing import Any, Callable, Protocol, Optional
+from typing import Any, Callable
 
 import numpy as np
 from numpy.typing import NDArray
 
-from .schemas import DIRICHLET
-from .schemas import NEUMANN
-
+from .schemas import DIRICHLET, NEUMANN
 from .elematl import (
     make_material,
     element_stiffness_bar1d,
     element_external_body_bar1d,
     element_internal_force_bar1d,
 )
+
+def _make_area_of_x(
+    props: dict[str, Any],
+    x_min: float,
+    x_max: float,
+) -> Callable[[float], float]:
+    """
+    Returns A(x) based on whatever is provided in element properties.
+
+    Supported (in order of precedence):
+      1) props["area_func"]: callable(x)->area
+      2) props["area0"] and props["area1"]: linear taper over [x_min, x_max]
+      3) props["area_start"] and props["area_end"]: linear taper over [x_min, x_max]
+      4) props["area"]: constant
+    """
+    if "area_func" in props and callable(props["area_func"]):
+        area_func = props["area_func"]
+
+        def A_of_x(x: float, f=area_func) -> float:
+            return float(f(x))
+
+        return A_of_x
+
+    # Linear taper definitions (global over the bar domain)
+    if ("area0" in props and "area1" in props) or ("area_start" in props and "area_end" in props):
+        a0 = float(props.get("area0", props.get("area_start")))
+        a1 = float(props.get("area1", props.get("area_end")))
+        L = float(x_max - x_min) if x_max != x_min else 1.0
+
+        def A_of_x(x: float, a0=a0, a1=a1, x0=x_min, L=L) -> float:
+            xi = (float(x) - x0) / L
+            return a0 + (a1 - a0) * xi
+
+        return A_of_x
+
+    # Fallback constant
+    A_const = float(props["area"])
+
+    def A_of_x(x: float, A_const=A_const) -> float:
+        return A_const
+
+    return A_of_x
+
+
+def _element_area_midpoint(
+    xe: NDArray[np.float64],
+    props: dict[str, Any],
+    x_min: float,
+    x_max: float,
+) -> float:
+    """
+    Element area computed from the midpoint coordinate of the element.
+    xe is the element nodal coordinate vector (shape (2,) for 2-node bar).
+    """
+    x_mid = 0.5 * (float(xe[0]) + float(xe[-1]))
+    A_of_x = _make_area_of_x(props, x_min, x_max)
+    return float(A_of_x(x_mid))
+
+
+# -----------------------------
+# Assembly
+# -----------------------------
 def assemble_distributed_loads(
     coords: NDArray[np.float64],
     blocks: list[dict],
@@ -93,50 +153,46 @@ def assemble_distributed_loads(
     block_elem_map: dict[int, tuple[int, int]],
     n_gauss: int = 2,
 ) -> NDArray[np.float64]:
- 
     num_node = coords.shape[0]
     dof_per_node = 1
     num_dof = num_node * dof_per_node
 
     F = np.zeros(num_dof, dtype=float)
 
+    # Global domain (used for linear taper definitions)
+    x_min = float(np.min(coords[:, 0]))
+    x_max = float(np.max(coords[:, 0]))
+
     for dl in dload or []:
         dtype = dl["type"].upper()
 
         if dtype == "BX":
             direction = np.asarray(dl["direction"], dtype=float)
-       
             sign = float(direction[0])
 
             input_type = dl.get("input_type", "SCALAR").upper()
-
             if input_type == "SCALAR":
-            
                 q0 = float(dl["value"]) * sign
 
                 def q_of_x(x, q0=q0) -> float:
                     return q0
-
             else:
-            
                 q_func = dl["q_func"]
 
                 def q_of_x(x, q_func=q_func, sign=sign) -> float:
-                
                     return float(sign * q_func(x))
 
-            
             for e in dl["elements"]:
                 ib, ie = block_elem_map[e]
                 block = blocks[ib]
                 nodes = np.asarray(block["connect"][ie], dtype=int)
                 xe = coords[nodes, 0]
 
+                # Uses Gauss quadrature inside element_external_body_bar1d when n_gauss is provided
                 fe = element_external_body_bar1d(xe, q_of_x, n_gauss=n_gauss)
 
                 for a, node in enumerate(nodes):
-                    ia = node  
-                    F[ia] += fe[a]
+                    F[node] += fe[a]
 
         elif dtype == "GRAV":
             direction = np.asarray(dl["direction"], dtype=float)
@@ -148,37 +204,41 @@ def assemble_distributed_loads(
 
                 mat_spec = materials[block["material"]]
                 rho = float(mat_spec["density"])
-                A = float(block["element"]["properties"]["area"])
 
-                g = 9.81 
-                q0 = rho * A * g * sign
+                nodes = np.asarray(block["connect"][ie], dtype=int)
+                xe = coords[nodes, 0]
+
+                # Midpoint area for this element (variable A)
+                props = block["element"]["properties"]
+                A_mid = _element_area_midpoint(xe, props, x_min=x_min, x_max=x_max)
+
+                g = 9.81
+                q0 = rho * A_mid * g * sign
 
                 def q_of_x(x, q0=q0) -> float:
                     return q0
 
-                nodes = np.asarray(block["connect"][ie], dtype=int)
-                xe = coords[nodes, 0]
+                # Uses Gauss quadrature inside element_external_body_bar1d when n_gauss is provided
                 fe = element_external_body_bar1d(xe, q_of_x, n_gauss=n_gauss)
 
                 for a, node in enumerate(nodes):
-                    ia = node
-                    F[ia] += fe[a]
+                    F[node] += fe[a]
 
     return F
 
-        
+
 def first_fe_code(
     coords: NDArray[float],
     blocks: list[dict],
     bcs: list[dict],
-    dload: list[dict] | None,              
+    dload: list[dict] | None,
     materials: dict[str, Any],
     block_elem_map: dict[int, tuple[int, int]],
 ) -> dict[str, Any]:
-    
     dof_per_node = 1
     num_node = coords.shape[0]
     num_dof = num_node * dof_per_node
+
     K = np.zeros((num_dof, num_dof), dtype=float)
     F = assemble_distributed_loads(
         coords=coords,
@@ -189,22 +249,30 @@ def first_fe_code(
         n_gauss=2,
     )
 
+    # Global domain (used for linear taper definitions)
+    x_min = float(np.min(coords[:, 0]))
+    x_max = float(np.max(coords[:, 0]))
+
     for bc in bcs:
         if bc["type"] == NEUMANN:
             for node in bc["nodes"]:
-                dof = node
-                F[dof] += bc["value"]
+                F[node] += bc["value"]
+
     for block in blocks:
-        A = block["element"]["properties"]["area"]
         material_obj = make_material(materials[block["material"]])
+        props = block["element"]["properties"]
 
         for nodes in block["connect"]:
+            nodes = np.asarray(nodes, dtype=int)
             eft = [global_dof(n, j, dof_per_node) for n in nodes for j in range(dof_per_node)]
-            xe_vec = coords[nodes, 0] 
+            xe_vec = coords[nodes, 0]
 
-            ke = element_stiffness_bar1d(xe_vec, A, material_obj, ue=None, n_gauss=2)
+            # Midpoint area for this element (variable A)
+            A_mid = _element_area_midpoint(xe_vec, props, x_min=x_min, x_max=x_max)
+
+            # Gauss quadrature is used inside element_stiffness_bar1d via n_gauss
+            ke = element_stiffness_bar1d(xe_vec, A_mid, material_obj, ue=None, n_gauss=2)
             K[np.ix_(eft, eft)] += ke
-
 
     prescribed_dofs: list[int] = []
     prescribed_vals: list[float] = []
@@ -217,6 +285,12 @@ def first_fe_code(
 
     all_dofs = np.arange(num_dof)
     free_dofs = np.setdiff1d(all_dofs, prescribed_dofs)
+
+    if free_dofs.size == 0:
+        dofs = np.zeros(num_dof, dtype=float)
+        dofs[prescribed_dofs] = prescribed_vals
+        return {"dofs": dofs, "stiff": K, "force": F}
+
     Kff = K[np.ix_(free_dofs, free_dofs)]
     Kfp = K[np.ix_(free_dofs, prescribed_dofs)]
     Ff = F[free_dofs] - np.dot(Kfp, prescribed_vals)
@@ -226,15 +300,8 @@ def first_fe_code(
     dofs[free_dofs] = uf
     dofs[prescribed_dofs] = prescribed_vals
 
-    if free_dofs.size == 0:
-        dofs = np.zeros(num_dof, dtype=float)
-        dofs[prescribed_dofs] = prescribed_vals
-        return {"dofs": dofs, "stiff": K, "force": F}
+    return {"dofs": dofs, "stiff": K, "force": F}
 
-
-    solution = {"dofs": dofs, "stiff": K, "force": F}
-
-    return solution
 
 def newton_solve_bar1d(
     coords: NDArray[float],
@@ -246,7 +313,6 @@ def newton_solve_bar1d(
     tol: float = 1e-10,
     max_iter: int = 25,
 ) -> dict[str, Any]:
-
     dof_per_node = 1
     num_node = coords.shape[0]
     num_dof = num_node * dof_per_node
@@ -268,7 +334,6 @@ def newton_solve_bar1d(
     all_dofs = np.arange(num_dof, dtype=int)
     free_dofs = np.setdiff1d(all_dofs, prescribed_dofs)
 
-    
     if prescribed_dofs.size > 0:
         u[prescribed_dofs] = prescribed_vals
 
@@ -284,24 +349,32 @@ def newton_solve_bar1d(
     for bc in bcs:
         if bc["type"] == NEUMANN:
             for node in bc["nodes"]:
-                dof = node
-                F_ext[dof] += bc["value"]
+                F_ext[node] += bc["value"]
 
-    for it in range(max_iter):
+    # Global domain (used for linear taper definitions)
+    x_min = float(np.min(coords[:, 0]))
+    x_max = float(np.max(coords[:, 0]))
+
+    for _it in range(max_iter):
         K = np.zeros((num_dof, num_dof), dtype=float)
         R_int = np.zeros(num_dof, dtype=float)
 
         for block in blocks:
-            A = block["element"]["properties"]["area"]
             material_obj = make_material(materials[block["material"]])
+            props = block["element"]["properties"]
 
             for nodes in block["connect"]:
+                nodes = np.asarray(nodes, dtype=int)
                 eft = [global_dof(n, j, dof_per_node) for n in nodes for j in range(dof_per_node)]
                 xe_vec = coords[nodes, 0]
                 ue = u[eft]
 
-                ke = element_stiffness_bar1d(xe_vec, A, material_obj, ue=ue, n_gauss=2)
-                fint_e = element_internal_force_bar1d(xe_vec, ue, A, material_obj, n_gauss=2)
+                # Midpoint area for this element (variable A)
+                A_mid = _element_area_midpoint(xe_vec, props, x_min=x_min, x_max=x_max)
+
+                # Gauss quadrature is used inside these element routines via n_gauss
+                ke = element_stiffness_bar1d(xe_vec, A_mid, material_obj, ue=ue, n_gauss=2)
+                fint_e = element_internal_force_bar1d(xe_vec, ue, A_mid, material_obj, n_gauss=2)
 
                 K[np.ix_(eft, eft)] += ke
                 R_int[eft] += fint_e
@@ -314,14 +387,15 @@ def newton_solve_bar1d(
         K_ff = K[np.ix_(free_dofs, free_dofs)]
 
         du_f = np.linalg.solve(K_ff, res_f)
-
         u[free_dofs] += du_f
 
-        du_norm = np.linalg.norm(du_f, ord=2)
-        if du_norm < tol:
+        if np.linalg.norm(du_f, ord=2) < tol:
             break
     else:
-        raise RuntimeError(f"Newton solver did not converge in {max_iter} iterations, the last du was {du_norm}.")
+        du_norm = np.linalg.norm(du_f, ord=2)
+        raise RuntimeError(
+            f"Newton solver did not converge in {max_iter} iterations, the last du was {du_norm}."
+        )
 
     return {"dofs": u, "stiff": K, "force": F_ext}
 

@@ -5,7 +5,7 @@ from tkinter import filedialog
 import wundy
 from wundy import ui
 from wundy import first
-
+from wundy import plt as wplt 
 
 def pick_yaml_file() -> str:
     
@@ -51,6 +51,15 @@ def main():
     )
 
     print(soln)
+
+    wplt.plot_bar1d_results(
+        coords=inp["coords"],
+        blocks=inp["blocks"],
+        materials=inp["materials"],
+        soln=soln,
+        show=True,
+        save_prefix=None,  # set e.g. "run1" to save PNGs
+    )    
 
 
 if __name__ == "__main__":

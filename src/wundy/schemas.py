@@ -31,6 +31,72 @@ def isnumeric(x) -> bool:
 def ispositive(arg: float | int) -> bool:
     return arg > 0
 
+def _validate_profile_spec(
+    spec: object,
+    *,
+    name: str,
+    default_input_type: str = "SCALAR",
+    require_positive: bool = True,
+) -> object:
+    """
+    Accept either a numeric scalar or a dict:
+      {"input_type": "SCALAR"|"TABLE"|"EQUATION", "value": ...}
+
+    TABLE expects [[x0, y0], [x1, y1], ...]
+    EQUATION expects a string expression in variable x (and possibly L, np, pi).
+    """
+    # Backward compatible scalar
+    if isnumeric(spec):
+        y = float(spec)
+        if require_positive and y <= 0.0:
+            raise ValueError(f"{name}: must be > 0")
+        return y
+
+    if not isinstance(spec, dict):
+        raise ValueError(
+            f"{name}: must be a number or a dict with keys {{input_type, value}}, got {type(spec).__name__}"
+        )
+
+    itype = normalize_case(spec.get("input_type", default_input_type))
+    val = spec.get("value", None)
+
+    if itype == "SCALAR":
+        if not isnumeric(val):
+            raise ValueError(f"{name}: for input_type='SCALAR', value must be numeric")
+        y = float(val)
+        if require_positive and y <= 0.0:
+            raise ValueError(f"{name}: must be > 0")
+        # normalize stored form (optional; keep dict shape)
+        spec["input_type"] = itype
+        spec["value"] = y
+        return spec
+
+    if itype == "TABLE":
+        if not isinstance(val, list):
+            raise ValueError(f"{name}: for input_type='TABLE', value must be a list of [x, y] pairs")
+        table: list[list[float]] = []
+        for row in val:
+            if not (isinstance(row, (list, tuple)) and len(row) == 2):
+                raise ValueError(f"{name}: each table row must be [x, y], got {row!r}")
+            x, y = row
+            if not isnumeric(x) or not isnumeric(y):
+                raise ValueError(f"{name}: table entries must be numeric, got {row!r}")
+            y = float(y)
+            if require_positive and y <= 0.0:
+                raise ValueError(f"{name}: table values must be > 0, got {row!r}")
+            table.append([float(x), y])
+        spec["input_type"] = itype
+        spec["value"] = table
+        return spec
+
+    if itype == "EQUATION":
+        if not isinstance(val, str):
+            raise ValueError(f"{name}: for input_type='EQUATION', value must be a string expression")
+        spec["input_type"] = itype
+        # leave value as-is (string)
+        return spec
+
+    raise ValueError(f"{name}: unknown input_type {itype!r}")
 
 def list_of_type(sequence: list, type) -> bool:
     return all(isinstance(n, type) for n in sequence)
@@ -82,12 +148,16 @@ def valid_dload_input_type(arg: str) -> bool:
 
 def validate_element(elem: dict[str, Any]) -> bool:
     if normalize_case(elem["type"]) == "T1D1":
-        schema = Schema({Optional("area", default=1.0): And(isnumeric, ispositive)})
-        v = schema.validate(elem["properties"])
-        elem["properties"].update(v)
-    else:
-        raise ValueError(f"Unknown element type {elem['type']!r}")
-    return True
+        props = elem.get("properties", {})
+        if props is None:
+            props = {}
+            elem["properties"] = props
+        if "area" not in props:
+            props["area"] = 1.0
+
+        props["area"] = _validate_profile_spec(props["area"], name="element.properties.area", require_positive=True)
+        return True
+    raise ValueError(f"Unknown element type {elem['type']!r}")
 
 
 def validate_material_parameters(material: dict[str, dict[str, Any]]) -> bool:
